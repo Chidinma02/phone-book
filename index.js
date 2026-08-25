@@ -18,6 +18,10 @@ app.get('/api/persons', (req, res) => {
   Person.find({}).then(persons => res.json(persons))
 })
 
+app.get('/health', (req, res) => {
+  res.send('ok')
+})
+
 app.get('/info', async (req, res) => {
   const count = await Person.countDocuments({})
   const date = new Date()
