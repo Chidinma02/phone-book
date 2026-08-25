@@ -1,0 +1,80 @@
+name: Deployment pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize]
+
+jobs:
+  simple_deployment_pipeline:
+    runs-on: ubuntu-latest
+    env:
+      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+      RENDER_HEALTH_URL: ${{ secrets.RENDER_HEALTH_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install root dependencies
+        run: npm install
+      - name: Install frontend dependencies
+        run: npm install --prefix frontend
+      - name: Check style (Frontend)
+        run: npm run lint --prefix frontend
+      - name: Build UI (Frontend)
+        run: npm run build --prefix frontend
+      - name: Test (Backend)
+        run: npm test
+      - name: Trigger deployment
+        if: github.event_name == 'push' && !contains(join(github.event.commits.*.message, ' '), '#skip') && env.RENDER_DEPLOY_HOOK_URL != ''
+        run: curl -s "$RENDER_DEPLOY_HOOK_URL"
+      - name: Health check
+        if: github.event_name == 'push' && !contains(join(github.event.commits.*.message, ' '), '#skip') && env.RENDER_HEALTH_URL != ''
+        run: curl -fsS --retry 5 --retry-delay 5 "$RENDER_HEALTH_URL"
+
+  tag_release:
+    needs: [simple_deployment_pipeline]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && !contains(join(github.event.commits.*.message, ' '), '#skip')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: '0'
+      - name: Bump version and push tag
+        uses: anothrNick/github-tag-action@1.75.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BUMP: patch
+
+  notify_success:
+    needs: [simple_deployment_pipeline]
+    runs-on: ubuntu-latest
+    if: success() && github.event_name == 'push' && !contains(join(github.event.commits.*.message, ' '), '#skip')
+    steps:
+      - name: Discord Success Notification
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK }}
+          status: ${{ needs.simple_deployment_pipeline.result }}
+          content: "A new version of Phonebook deployed!"
+          title: "Deployment Succeeded"
+          description: "Commit [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) by ${{ github.actor }} was successfully deployed."
+
+  notify_failure:
+    needs: [simple_deployment_pipeline]
+    runs-on: ubuntu-latest
+    if: failure()
+    steps:
+      - name: Discord Failure Notification
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK }}
+          status: ${{ needs.simple_deployment_pipeline.result }}
+          content: "Build failed!"
+          title: "Build Failed"
+          description: "Commit [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) by ${{ github.actor }} failed the build."
